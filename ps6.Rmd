@@ -1,0 +1,310 @@
+---
+title: "ps6"
+author: "Tiana Randriamaro"
+date: "10/18/2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+setwd('/Users/maryrandriamaro/OneDrive - Washington State University (email.wsu.edu)/wsu/512 econII/PS6')
+library(Matrix)
+library(dplyr)
+library(magic)
+library(reshape)
+library(plm)
+library(multiwayvcov)
+library(Synth)
+library(clubSandwich)
+library(magrittr)
+library(ggplot2)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Problem 2
+Synthetic control estimation using "synth_smoking.csv" dataset.
+
+# a) Difference-in-difference regression
+Treatment is California (state 3) starting in 1989.
+Dependent variable is "cigsale".
+
+```{r}
+mydata<-read.csv("synth_smoking.csv",header = TRUE)
+pdata <- pdata.frame(mydata,index=c("state","year"))
+pdata$treatment <- ifelse(pdata$state == 3 & 
+            as.numeric(as.character(pdata$year)) > "1988",1,0)
+```
+
+Estimating model with state and year fixed effects without covariates and clustering the standard errors by state.
+
+```{r}
+# Model without covariates, se clustered by state
+mod0<- plm(cigsale ~ treatment,
+              data=pdata,effect = c("twoways"),
+           model = "within")
+coef_test(mod0, vcov = "CR1", cluster = "individual",test = "naive-t")
+```
+
+Model with covariates: lnincome, beer, age15to24, retprice and clustered standard errors by state.
+
+```{r}
+# Model with covariates, NAs set to 0
+pdata[is.na(pdata)] <- 0
+mod1<- plm(cigsale ~ treatment+lnincome+beer+age15to24+retprice,
+           data=pdata, effect = c("twoways"), model = "within")
+coef_test(mod1, vcov = "CR1", cluster = "individual",test = "naive-t")
+
+```
+
+If missing values are set equal to 0, the treatment effect is -17.649, which is closer to the effect without the covariates. Treatment is still significant. Retail price is also significant.
+
+```{r}
+# Model with covariates, NAs not set to 0
+mod1<- plm(cigsale ~ treatment+lnincome+beer+age15to24+retprice,
+           data=pdata, effect = c("twoways"), model = "within")
+coef_test(mod1, vcov = "CR1", cluster = "individual",test = "naive-t")
+```
+Here the missing values are not set equal to 0. The treatment effect is -2.499, which is much smaller in magnitude than with the model without covariates. The significance also shifted to income and retail price.
+
+# b) Synthetic control estimation
+Match pre-treatment values of lnincome, beer, age15to24, retprice, and cigsale in years 1975, 1980, and 1988.
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+dataprep.out <- dataprep(
+  foo = mydata,
+  predictors = c("lnincome","beer","age15to24",
+                 "retprice"),
+  predictors.op = "mean",
+  dependent = "cigsale",
+  unit.variable = "state",
+  time.variable = "year",
+  special.predictors = list(
+    list("cigsale", 1975, "mean"),
+    list("cigsale", 1980, "mean"),
+    list("cigsale", 1988, "mean")),
+  treatment.identifier = 3,
+  controls.identifier = c(1,2,4:39),
+  time.predictors.prior = c(1970:1988),
+  time.optimize.ssr = c(1970:1988),
+  time.plot = c(1970:2000))
+synth.out <- synth(dataprep.out)
+```
+
+Below are the results of the synthetic control estimation
+
+```{r synth results, echo=TRUE}
+synth.tables <- synth.tab(
+      dataprep.res = dataprep.out,
+      synth.res = synth.out)
+print(synth.tables)
+```
+
+Plot of treated and synthetic
+```{r path plot, echo=TRUE}
+path.plot(dataprep.res = dataprep.out,synth.res = synth.out,
+          Ylab = c("Cigarette sales"),
+          Xlab = c("year"),
+          tr.intake = 1989,
+          Main = c("Path plot of treated and synthetic group"))
+```
+
+```{r gap plot, echo=TRUE}
+## plot the gaps (treated - synthetic)
+gaps.plot(dataprep.res = dataprep.out,synth.res = synth.out,
+          Ylab = c("Gap in cigarette sales"),
+          Xlab = c("year"),
+          tr.intake = 1989,
+          Main = c("Gaps in cigsale between treated and synthetic"))
+```
+
+The estimated treatment effect is the difference between cigsale for the treated and synthetic group after the treatment, i.e. from 1989 to 2000. 
+
+```{r treatment effect, echo=TRUE}
+gaps<- dataprep.out$Y1plot-(
+        dataprep.out$Y0plot%*%synth.out$solution.w
+        ) ;
+treateffect <- gaps[20:length(gaps),]
+treateffect
+cat("\n")
+avg_diff <- mean(gaps[20:length(gaps),])
+cat("The average difference in cigsale between treated and synthetic =", avg_diff)
+
+```
+Compared with the estimated treatment effect from the difference-in-difference method with covariates, this is much greater in magnitude. This is because California's trend differs from the other states' so the difference-in-difference estimation leads to biased results.
+
+# c) Macthing cigarette sales over the entire pre-treatment period (1970-1988)
+```{r synth entire pretreat, message=FALSE, warning=FALSE, include=FALSE}
+dataprep.out1 <- dataprep(
+  foo = mydata,
+  predictors = c("lnincome","beer","age15to24",
+                 "retprice"),
+  predictors.op = "mean",
+  dependent = "cigsale",
+  unit.variable = "state",
+  time.variable = "year",
+  special.predictors = list(
+list("cigsale", 1970, "mean"),list("cigsale", 1971, "mean"),
+list("cigsale", 1972, "mean"),list("cigsale", 1973, "mean"),
+list("cigsale", 1974, "mean"),list("cigsale", 1975, "mean"),
+list("cigsale", 1976, "mean"),list("cigsale", 1977, "mean"),
+list("cigsale", 1978, "mean"),list("cigsale", 1979, "mean"),
+list("cigsale", 1980, "mean"),list("cigsale", 1981, "mean"),
+list("cigsale", 1982, "mean"),list("cigsale", 1983, "mean"),
+list("cigsale", 1984, "mean"),list("cigsale", 1985, "mean"),
+list("cigsale", 1986, "mean"),list("cigsale", 1987, "mean"),
+list("cigsale", 1988, "mean")),
+  treatment.identifier = 3,
+  controls.identifier = c(1,2,4:39),
+  time.predictors.prior = c(1970:1988),
+  time.optimize.ssr = c(1970:1988),
+  time.plot = c(1970:2000));
+synth.out1 <- synth(dataprep.out1);
+```
+
+Below is the results from the synthetic control using all years of pre-treatment.
+
+```{r synth results all year, echo=TRUE}
+synth.tables <- synth.tab(
+      dataprep.res = dataprep.out1,
+      synth.res = synth.out1)
+print(synth.tables$tab.pred)
+cat("\n")
+print(synth.tables$tab.loss)
+```
+
+Here is the level plot of the synthetic control with all years of pre-treatment.
+
+```{r path plot all year, echo=TRUE}
+path.plot(dataprep.res = dataprep.out1,synth.res = synth.out1,
+          Ylab = c("cigsale"),
+          Xlab = c("year"),
+          tr.intake = 1989,
+          Main = c("Path plot of treated and synthetic group"))
+```
+
+Macthing the cigarette sales over the entire pre-treatment period leads to a lower mean squared prediction error than matching with only 3 specific years. Hence, the fit of the synthetic control improves as we matched over more pre-treatment data.
+
+# d) Placebo synthetic control estimation on each of the other states using the same specification as California
+Saving the gaps from each state as treatment
+```{r, message=FALSE, warning=FALSE, include=TRUE}
+uniquestate <- as.array(unique(pdata$state, incomparables = FALSE))
+uniquestate <- as.numeric(as.character(uniquestate))
+placebo <- function(val){
+  dataprep.out <- dataprep(
+  foo = mydata,
+  predictors = c("lnincome","beer","age15to24",
+                 "retprice"),
+  predictors.op = "mean",
+  dependent = "cigsale",
+  unit.variable = "state",
+  time.variable = "year",
+  special.predictors = list(
+    list("cigsale", 1975, "mean"),
+    list("cigsale", 1980, "mean"),
+    list("cigsale", 1988, "mean")),
+  treatment.identifier = val,
+  controls.identifier = c(uniquestate %>% 
+     setdiff(., val)),
+  time.predictors.prior = c(1970:1988),
+  time.optimize.ssr = c(1970:1988),
+  time.plot = c(1970:2000))
+  
+  synth.out <- synth(dataprep.out);
+  gaps<- dataprep.out$Y1plot-(
+        dataprep.out$Y0plot%*%synth.out$solution.w)
+  return(gaps)
+  }
+```
+
+
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+gapsdf <- placebo(1)
+i <- 2
+while (i <length(uniquestate) + 1){
+  gapsdf <- cbind(gapsdf, placebo(i))
+  i <- i + 1
+}
+```
+
+
+Plotting the gaps in cigarette sales for each of the state as treatment in the placebo experiment.
+```{r, echo=TRUE}
+yeardf<- data.frame(1970:2000)
+colnames(yeardf) <- c("year")
+gapsdf <- data.frame(cbind(gapsdf,yeardf))
+gapsdf <- melt(gapsdf, id.vars = "year", variable_name="state")
+```
+
+```{r placebo graph, echo=TRUE}
+d_filtered <- gapsdf %>%
+  group_by(state) %>% 
+  filter(state == "X3") %>%
+  ungroup()
+ggplot(d_filtered) +
+  geom_line(aes(year, value, group = state), data = gapsdf, colour = alpha("grey", 0.7)) +
+  geom_line(aes(year, value, colour = state)) +
+  labs(y="Gaps in cigarette sales",title="Placebo experiment") + theme(legend.position = "right")
+```
+
+
+Based on the differences from the last year of data (2000), there is only one other state that has a lower difference than California (state 3). Hence the probability of finding a more negative difference than California's is 1/39.
+
+
+# e) Mean squared error in pre-treatment period for each state
+```{r}
+uniquestate <- as.array(unique(pdata$state, incomparables = FALSE))
+uniquestate <- as.numeric(as.character(uniquestate))
+```
+
+```{r, eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+mspeall <- data.frame(matrix(ncol = 2))
+colnames(mspeall) <- c("state","MSPE")
+for (val in uniquestate){
+  dataprep.out <- dataprep(
+  foo = mydata,
+  predictors = c("lnincome","beer","age15to24",
+                 "retprice"),
+  predictors.op = "mean",
+  dependent = "cigsale",
+  unit.variable = "state",
+  time.variable = "year",
+  special.predictors = list(
+    list("cigsale", 1975, "mean"),
+    list("cigsale", 1980, "mean"),
+    list("cigsale", 1988, "mean")),
+  treatment.identifier = val,
+  controls.identifier = c(uniquestate %>% 
+     setdiff(., val)),
+  time.predictors.prior = c(1970:1988),
+  time.optimize.ssr = c(1970:1988),
+  time.plot = c(1970:2000));
+  synth.out <- synth(dataprep.out)
+  mspe <- synth.out$loss.v
+  mspeall[val,1] <- val
+  mspeall[val,2] <- mspe
+  }
+```
+
+```{r mspe, echo=TRUE}
+mspeall <- data.frame(c(6.386208,4.572699,3.069261,17.95988,20.05402,28.08742,2.498139,6.128326,3.505572,13.84467,12.55563,14.10454,426.5601,2.709698,9.515732,13.11222,4.435552,1.465984,5.292081,4.353038,46.1672,3485.458,3.262055,81.55678,12.99116,1.993321,8.736483,3.75516,61.79715,2.234295,6.560668,6.346057,5.765884,593.7644,16.11938,3.371872,8.266789,2.884817,75.21651))
+colnames(mspeall) <- c("MSPE")
+statedf <- data.frame(c("X1","X2","X3","X4","X5","X6","X7","X8","X9","X10","X11","X12","X13","X14","X15","X16","X17","X18","X19","X20","X21","X22","X23","X24","X25","X26","X27","X28","X29","X30","X31","X32","X33","X34","X35","X36","X37","X38","X39"))
+colnames(statedf) <- c("state")
+mspedf <- cbind(statedf,mspeall)
+mergedf <- merge(mspedf,gapsdf,by.x = "state",by.y = "state" )
+mspe_gaps <- mergedf[ which(mergedf$MSPE <= 20), ]
+```
+
+```{r placebo graph mspe, echo=TRUE}
+mspe_filtered <- mspe_gaps %>%
+  group_by(state) %>% 
+  filter(state == "X3") %>%
+  ungroup()
+ggplot() +
+  geom_line(aes(year, value, group = state), data = mspe_gaps, colour = alpha("grey", 0.7)) +
+  geom_line(aes(year, value, colour = state), data = mspe_filtered ) + labs(y="Gaps in cigarette sales",title="Placebo experiment with MSPE no greater than 20") + 
+  theme(legend.position = "right")
+
+```
+
+By removing all states with MSPE greater than 20, California now has the lowest difference in cigarette sales in the last year 2000. Hence the probability of finding a more negative difference than the one in California is zero.
+
+
