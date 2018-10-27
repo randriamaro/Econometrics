@@ -1,2 +1,2 @@
 # Economics
-Contains some economics class homework
+Contains some economitrics homework
